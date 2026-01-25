@@ -62,7 +62,7 @@ export default function UseCases() {
               data-testid={`card-usecase-${useCase.id}`}
             >
               <div className="flex items-start gap-4 mb-4">
-                <div className="w-14 h-14 rounded-md bg-primary/10 flex items-center justify-center text-primary flex-shrink-0 group-hover:bg-primary/20 transition-colors">
+                <div className="w-14 h-14 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0 group-hover:bg-primary/20 transition-colors">
                   {useCase.icon}
                 </div>
                 <div>
@@ -71,7 +71,7 @@ export default function UseCases() {
                 </div>
               </div>
               
-              <div className="flex flex-wrap gap-2 mt-4 pl-[72px]">
+              <div className="flex flex-wrap gap-2 mt-4 pl-18">
                 {useCase.applications.map((app) => (
                   <span
                     key={app}
