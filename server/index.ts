@@ -1,4 +1,4 @@
-import express = require("express");
+import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
