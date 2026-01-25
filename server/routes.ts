@@ -1,7 +1,7 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { createServer, type Server } from "http";
 import { Server as SocketServer } from "socket.io";
-import multer from "multer";
+import multer, { type Multer } from "multer";
 import type { LivenessSignals, PostHocAnalysis, Anomaly } from "@shared/schema";
 
 const upload = multer({ 
@@ -160,7 +160,7 @@ export async function registerRoutes(
     });
   });
 
-  app.post("/api/analyze-media", upload.single("file"), (req, res) => {
+  app.post("/api/analyze-media", upload.single("file"), (req: Request & { file?: Multer.File }, res) => {
     const file = req.file;
     const analysisId = req.body.analysisId as string;
     

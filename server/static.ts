@@ -1,6 +1,7 @@
-import express, { type Express } from "express";
-import fs from "fs";
-import path from "path";
+import * as express from "express";
+import { type Express } from "express";
+import * as fs from "fs";
+import * as path from "path";
 
 export function serveStatic(app: Express) {
   const distPath = path.resolve(__dirname, "public");
