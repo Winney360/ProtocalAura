@@ -207,7 +207,7 @@ export default function LiveDemo({ isActive, onClose }: LiveDemoProps) {
                               style={{ clipPath: "inset(0 0 50% 0)" }}
                             >
                               <motion.div
-                                className="absolute inset-0 bg-gradient-to-b from-primary/30 to-transparent"
+                                className="absolute inset-0 bg-linear-to-b from-primary/30 to-transparent"
                                 animate={{ y: ["-100%", "200%"] }}
                                 transition={{
                                   duration: 3,

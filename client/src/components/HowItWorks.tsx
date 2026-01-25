@@ -30,7 +30,7 @@ const steps = [
 
 export default function HowItWorks() {
   return (
-    <section id="how-it-works" className="py-24 px-6 bg-gradient-to-b from-background to-[hsl(260,25%,8%)]">
+    <section id="how-it-works" className="py-24 px-6 bg-linear-to-b from-background to-[hsl(260,25%,8%)]">
       <div className="max-w-6xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -48,7 +48,7 @@ export default function HowItWorks() {
         </motion.div>
 
         <div className="relative">
-          <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gradient-to-b from-primary/50 via-primary/20 to-transparent hidden lg:block" />
+          <div className="absolute left-1/2 top-0 bottom-0 w-px bg-linear-to-b from-primary/50 via-primary/20 to-transparent hidden lg:block" />
           
           <div className="space-y-12 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-8">
             {steps.map((step, index) => (
@@ -63,7 +63,7 @@ export default function HowItWorks() {
               >
                 <div className={`glass-effect p-6 rounded-md hover-elevate ${index % 2 === 0 ? 'lg:ml-auto' : ''} max-w-md`}>
                   <div className={`flex items-center gap-4 mb-4 ${index % 2 === 0 ? 'lg:flex-row-reverse' : ''}`}>
-                    <div className="w-14 h-14 rounded-md bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
+                    <div className="w-14 h-14 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0">
                       {step.icon}
                     </div>
                     <div>

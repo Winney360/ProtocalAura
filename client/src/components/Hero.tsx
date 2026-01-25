@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Shield, Zap, Eye } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Button } from "../components/ui/button";
 
 interface HeroProps {
   onStartDemo: () => void;
@@ -9,7 +9,7 @@ interface HeroProps {
 export default function Hero({ onStartDemo }: HeroProps) {
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-[hsl(260,30%,10%)]" />
+      <div className="absolute inset-0 bg-linear-to-br from-background via-background to-[hsl(260,30%,10%)]" />
       
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/5 rounded-full blur-3xl" />
@@ -72,7 +72,7 @@ export default function Hero({ onStartDemo }: HeroProps) {
           <Button 
             size="lg" 
             onClick={onStartDemo}
-            className="min-w-[200px]"
+            className="min-w-50"
             data-testid="button-start-demo"
           >
             <Eye className="w-4 h-4 mr-2" />
@@ -81,7 +81,7 @@ export default function Hero({ onStartDemo }: HeroProps) {
           <Button 
             variant="outline" 
             size="lg"
-            className="min-w-[200px]"
+            className="min-w-50"
             data-testid="button-learn-more"
             onClick={() => {
               document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });

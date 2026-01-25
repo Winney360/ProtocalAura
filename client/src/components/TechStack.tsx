@@ -36,7 +36,7 @@ const categoryLabels: Record<string, string> = {
 
 export default function TechStack() {
   return (
-    <section id="tech-stack" className="py-24 px-6 bg-gradient-to-b from-[hsl(260,25%,8%)] to-background">
+    <section id="tech-stack" className="py-24 px-6 bg-linear-to-b from-[hsl(260,25%,8%)] to-background">
       <div className="max-w-6xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -79,7 +79,7 @@ export default function TechStack() {
                     data-testid={`tech-item-${item.name.toLowerCase().replace(/\s+/g, '-')}`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-md bg-primary/10 flex items-center justify-center text-primary flex-shrink-0">
+                      <div className="w-10 h-10 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0">
                         {item.icon}
                       </div>
                       <div>
