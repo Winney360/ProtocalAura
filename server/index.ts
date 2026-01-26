@@ -1,98 +1,133 @@
-import express from "express";
-import type { Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
-import { serveStatic } from "./static";
+// server/index.ts
+import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
+import { Server as SocketServer } from "socket.io";
+import multer, { type Multer } from 'multer';
+import axios from "axios";
+import FormData from "form-data";
 
 const app = express();
 const httpServer = createServer(app);
 
-declare module "http" {
-  interface IncomingMessage {
-    rawBody: unknown;
-  }
-}
+// Multer memory storage for uploads
+const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(
-  express.json({
-    verify: (req, _res, buf) => {
-      req.rawBody = buf;
-    },
-  }),
-);
+// Map to store analysis results
+const analysisResults = new Map<
+  string,
+  { status: "processing" | "complete" | "error"; results?: any }
+>();
 
+// Middleware
+app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
+// Logging helper
+function log(message: string) {
+  const time = new Date().toLocaleTimeString();
+  console.log(`[${time}] ${message}`);
 }
 
-app.use((req, res, next) => {
-  const start = Date.now();
-  const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+// Health endpoint
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "healthy", service: "Protocol Aura", version: "1.0.0" });
+});
 
-  const originalResJson = res.json;
-  res.json = function (bodyJson, ...args) {
-    capturedJsonResponse = bodyJson;
-    return originalResJson.apply(res, [bodyJson, ...args]);
-  };
+// --- Level 2: File upload and forward to Python ---
+app.post(
+  "/api/analyze-media",
+  upload.single("file"),
+  async (req: Request & { file?:Multer.File }, res) => {
+    const file = req.file;
+    const analysisId = req.body.analysisId;
 
-  res.on("finish", () => {
-    const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
-      let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+    if (!file || !analysisId) {
+      return res.status(400).json({ error: "File and analysisId are required" });
+    }
+
+    try {
+      const form = new FormData();
+      form.append("file", file.buffer, { filename: file.originalname });
+
+      // Forward to Python AI service
+      const response = await axios.post("http://localhost:8000/analyze", form, {
+        headers: form.getHeaders(),
+      });
+
+      // Store the result
+      analysisResults.set(analysisId, { status: "complete", results: response.data });
+
+      return res.json({ success: true, analysisId, message: "Analysis started" });
+    } catch (err: any) {
+      console.error("Python service error:", err.message || err);
+      analysisResults.set(analysisId, { status: "error" });
+      return res.status(500).json({ error: "Python service request failed" });
+    }
+  }
+);
+
+// Get analysis result
+app.get("/api/analysis-result/:id", (req, res) => {
+  const analysisId = req.params.id;
+  const result = analysisResults.get(analysisId);
+  if (!result) return res.status(404).json({ error: "Analysis not found" });
+  res.json(result);
+});
+
+// --- Socket.IO Liveness streaming ---
+const io = new SocketServer(httpServer, { cors: { origin: "*", methods: ["GET", "POST"] } });
+
+// Store intervals for live streaming
+const livenessIntervals = new Map<string, NodeJS.Timeout>();
+
+io.on("connection", (socket) => {
+  log(`Client connected: ${socket.id}`);
+
+  socket.on("start-liveness", async (data: { frame?: Buffer }) => {
+    if (livenessIntervals.has(socket.id)) {
+      clearInterval(livenessIntervals.get(socket.id)!);
+    }
+
+    const sendSignals = async () => {
+      try {
+        if (!data.frame) return;
+
+        const form = new FormData();
+        form.append("file", data.frame, { filename: "frame.jpg" });
+
+        // Call Python liveness endpoint
+        const response = await axios.post("http://localhost:8000/liveness", form, {
+          headers: form.getHeaders(),
+        });
+
+        socket.emit("liveness-signals", response.data);
+      } catch (err) {
+        console.error("Error fetching liveness from Python:", err);
       }
+    };
 
-      log(logLine);
+    // Send immediately and then every 500ms
+    await sendSignals();
+    const interval = setInterval(sendSignals, 500);
+    livenessIntervals.set(socket.id, interval);
+  });
+
+  socket.on("stop-liveness", () => {
+    if (livenessIntervals.has(socket.id)) {
+      clearInterval(livenessIntervals.get(socket.id)!);
+      livenessIntervals.delete(socket.id);
     }
   });
 
-  next();
-});
-
-(async () => {
-  await registerRoutes(httpServer, app);
-
-  app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
-
-    console.error("Internal Server Error:", err);
-
-    if (res.headersSent) {
-      return next(err);
+  socket.on("disconnect", () => {
+    if (livenessIntervals.has(socket.id)) {
+      clearInterval(livenessIntervals.get(socket.id)!);
+      livenessIntervals.delete(socket.id);
     }
-
-    return res.status(status).json({ message });
+    log(`Client disconnected: ${socket.id}`);
   });
-
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
-  //if (process.env.NODE_ENV === "production") {
-    //serveStatic(app);
-  //} else {
-    //const { setupVite } = await import("./vite");
-    //await setupVite(httpServer, app);
-  //}
-
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(port, () => {
-  log(`serving on port ${port}`);
 });
 
-})();
+// --- Start server ---
+const PORT = parseInt(process.env.PORT || "5000", 10);
+httpServer.listen(PORT, () => log(`Node.js server running on http://localhost:${PORT}`));

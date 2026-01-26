@@ -1,11 +1,11 @@
 import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Upload, FileVideo, FileAudio, AlertCircle, CheckCircle2, XCircle, Clock, Trash2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import type { PostHocAnalysis, Anomaly } from "@shared/schema";
+import { Button } from "../components/ui/button";
+import { Card } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Progress } from "../components/ui/progress";
+import type { PostHocAnalysis, Anomaly } from "../../../shared/schema";
 
 export default function PostHocDetection() {
   const [analyses, setAnalyses] = useState<PostHocAnalysis[]>([]);
@@ -227,7 +227,7 @@ export default function PostHocDetection() {
                           )}
                         </div>
                         <div>
-                          <h4 className="font-medium text-sm truncate max-w-[200px]">{analysis.fileName}</h4>
+                          <h4 className="font-medium text-sm truncate max-w-50">{analysis.fileName}</h4>
                           <p className="text-xs text-muted-foreground capitalize">{analysis.fileType} file</p>
                         </div>
                       </div>
@@ -268,13 +268,13 @@ export default function PostHocDetection() {
                           <div className="glass-effect p-3 rounded-md">
                             <span className="text-xs text-muted-foreground block mb-1">Authenticity Score</span>
                             <span className="text-xl font-bold gradient-text" data-testid={`score-${analysis.id}`}>
-                              {analysis.results.humanityScore}%
+                              {analysis.results.humanityScore || 0}%
                             </span>
                           </div>
                           <div className="glass-effect p-3 rounded-md">
                             <span className="text-xs text-muted-foreground block mb-1">Anomalies Found</span>
                             <span className="text-xl font-bold text-foreground">
-                              {analysis.results.anomalies.length}
+                              {analysis.results.anomalies?.length || 0}
                             </span>
                           </div>
                           <div className="glass-effect p-3 rounded-md">
@@ -282,12 +282,12 @@ export default function PostHocDetection() {
                               <Clock className="w-3 h-3" /> Processing Time
                             </span>
                             <span className="text-xl font-bold text-foreground">
-                              {analysis.results.processingTime}s
+                              {analysis.results.processingTime || 0}s
                             </span>
                           </div>
                         </div>
 
-                        {analysis.results.anomalies.length > 0 && (
+                        {analysis.results.anomalies && analysis.results.anomalies.length > 0 ? (
                           <div>
                             <h5 className="text-sm font-medium mb-2">Detected Anomalies</h5>
                             <div className="space-y-2 max-h-40 overflow-y-auto">
@@ -299,16 +299,20 @@ export default function PostHocDetection() {
                                 >
                                   <div className="flex items-center gap-2">
                                     <Badge variant="secondary" className={getSeverityColor(anomaly.severity)}>
-                                      {anomaly.severity}
+                                      {anomaly.severity || 'low'}
                                     </Badge>
-                                    <span className="text-sm">{anomaly.description}</span>
+                                    <span className="text-sm">{anomaly.description || 'Unknown anomaly'}</span>
                                   </div>
                                   <span className="text-xs text-muted-foreground font-mono">
-                                    {anomaly.timestamp.toFixed(1)}s
+                                    {(anomaly.timestamp || 0).toFixed(1)}s
                                   </span>
                                 </div>
                               ))}
                             </div>
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-muted-foreground text-sm">
+                            No anomalies detected
                           </div>
                         )}
                       </div>
