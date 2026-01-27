@@ -1,12 +1,12 @@
 import { useState, useCallback } from "react";
-import Navigation from "@/components/Navigation";
-import Hero from "@/components/Hero";
-import HowItWorks from "@/components/HowItWorks";
-import UseCases from "@/components/UseCases";
-import TechStack from "@/components/TechStack";
-import LiveDemo from "@/components/LiveDemo";
-import PostHocDetection from "@/components/PostHocDetection";
-import Footer from "@/components/Footer";
+import Navigation from "../components/Navigation";
+import Hero from "../components/Hero";
+import HowItWorks from "../components/HowItWorks";
+import UseCases from "../components/UseCases";
+import TechStack from "../components/TechStack";
+import LiveDemo from "../components/LiveDemo";
+import PostHocDetection from "../components/PostHocDetection";
+import Footer from "../components/Footer";
 
 export default function Home() {
   const [isDemoActive, setIsDemoActive] = useState(false);
