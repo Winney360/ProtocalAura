@@ -1,4 +1,3 @@
-// File: server/src/routes/analyze.ts (UPDATED with Temporal Analysis)
 import { Router } from "express";
 import multer from "multer";
 import axios from "axios";
@@ -6,181 +5,332 @@ import FormData from "form-data";
 import fs from "fs";
 import path from "path";
 import { extractFrames } from "../utils/extractFrames";
+import { extractAudio, hasAudioStream } from "../utils/extractAudio";
 
 const router = Router();
 const upload = multer({ dest: "uploads/" });
 
-router.post("/analyze-media", upload.single("file"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "No file uploaded" });
+// Helper function to combine verdicts
+const combineVerdicts = (videoVerdict: string, audioAnalysis: any): string => {
+  if (!audioAnalysis || !audioAnalysis.success) {
+    return videoVerdict;
   }
+  
+  const audioVerdict = audioAnalysis.final_audio_verdict || 'unknown';
+  
+  // Combined logic
+  if (videoVerdict === "authentic" && audioVerdict === "likely_authentic") {
+    return "highly_authentic";
+  }
+  
+  if (videoVerdict === "highly_authentic" && audioVerdict === "likely_authentic") {
+    return "highly_authentic";
+  }
+  
+  if (videoVerdict === "suspicious" || audioVerdict === "suspicious") {
+    return "suspicious";
+  }
+  
+  if (videoVerdict === "needs_review" || audioVerdict === "needs_review") {
+    return "needs_review";
+  }
+  
+  return videoVerdict;
+};
 
+// Helper to calculate overall confidence
+const calculateOverallConfidence = (videoConfidence: number, audioConfidence: number | null, temporalScore: number): number => {
+  if (audioConfidence === null) {
+    // Video only: 70% visual confidence, 30% temporal
+    return (videoConfidence * 0.7) + (temporalScore * 0.3);
+  }
+  
+  // Combined: 50% video, 20% audio, 30% temporal
+  return (videoConfidence * 0.5) + (audioConfidence * 0.2) + (temporalScore * 0.3);
+};
+
+// Main analysis endpoint
+router.post("/analyze-media", upload.single("file"), async (req, res) => {
   const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   const framesDir = path.join("uploads", `frames-${sessionId}`);
+  
+  if (!req.file) {
+    return res.status(400).json({ 
+      success: false,
+      error: "No file uploaded",
+      session_id: sessionId 
+    });
+  }
 
   try {
     console.log(`[${sessionId}] Processing: ${req.file.originalname}`);
     
-    // 1️⃣ Extract frames (30 frames for temporal analysis)
+    // 1️⃣ Extract frames for video analysis
+    console.log(`[${sessionId}] Extracting frames...`);
     const frames = await extractFrames(req.file.path, framesDir, 30);
+    
+    if (frames.length === 0) {
+      throw new Error("No frames could be extracted from video");
+    }
+    
     console.log(`[${sessionId}] Extracted ${frames.length} frames`);
 
-    // Prepare form data for AI service (send all frames at once for temporal analysis)
-    const form = new FormData();
+    // 2️⃣ Prepare video analysis request
+    const videoForm = new FormData();
     
-    // Add frames in order (important for temporal analysis)
+    // Add frames in order for temporal analysis
     frames.forEach((framePath, index) => {
-      form.append("files", fs.createReadStream(framePath), {
+      videoForm.append("files", fs.createReadStream(framePath), {
         filename: `frame_${index.toString().padStart(3, '0')}.jpg`,
         contentType: "image/jpeg"
       });
     });
 
-    // 2️⃣ Send to AI service with temporal analysis
-    console.log(`[${sessionId}] Sending to AI service for temporal analysis...`);
-    const aiResponse = await axios.post(
-      "http://127.0.0.1:8000/liveness/level2",
-      form,
-      { 
-        headers: form.getHeaders(),
-        timeout: 120000 // 2 minute timeout for temporal analysis
-      }
-    );
-
-    const aiData = aiResponse.data;
-    
-    // 3️⃣ Process temporal analysis results
-    const temporalAnalysis = aiData.temporal_analysis || {
-      temporal_consistency_score: 0,
-      stability: 'unknown',
-      anomaly_count: 0
-    };
-
-    // 4️⃣ Enhanced aggregation with temporal factors
-    const frameResults = aiData.frame_details || [];
-    
-    // Calculate averages from all frames
-    const avg = (key: string) => {
-      if (frameResults.length === 0) return 0;
-      return frameResults.reduce((sum: number, frame: any) => sum + (frame[key] || 0), 0) / frameResults.length;
-    };
-
-    const aggregated = {
-      humanityScore: Number(avg("humanity_score") || 0).toFixed(2),
-      confidence: Number(avg("confidence") || 0).toFixed(2),
-      textureVariance: Number(avg("visual_metrics?.feature_variance") || 0).toFixed(2),
-      edgeDensity: Number(avg("visual_metrics?.feature_entropy") || 0).toFixed(4),
-    };
-
-    // 5️⃣ Enhanced verdict with temporal analysis
-    let verdict = "suspicious";
-    let confidenceLevel = "low";
-    
-    const baseHumanity = parseFloat(aggregated.humanityScore);
-    const baseConfidence = parseFloat(aggregated.confidence);
-    const temporalScore = temporalAnalysis.temporal_consistency_score || 0;
-    const anomalyCount = temporalAnalysis.anomaly_count || 0;
-    
-    // Combined scoring: 70% visual, 30% temporal
-    const combinedScore = (baseHumanity * 0.7) + (temporalScore * 0.3);
-    const combinedConfidence = (baseConfidence * 0.7) + (temporalScore * 0.3);
-    
-    // Determine verdict with temporal considerations
-    if (combinedScore > 0.75 && anomalyCount === 0 && temporalScore > 0.7) {
-      verdict = "authentic";
-      confidenceLevel = "high";
-    } else if (combinedScore > 0.6 && anomalyCount <= 1 && temporalScore > 0.5) {
-      verdict = "likely_authentic";
-      confidenceLevel = "medium";
-    } else if (combinedScore > 0.4) {
-      verdict = "needs_review";
-      confidenceLevel = "low";
-    } else {
-      verdict = "suspicious";
-      confidenceLevel = "low";
+    // 3️⃣ Analyze video with temporal analysis
+    console.log(`[${sessionId}] Analyzing video with temporal analysis...`);
+    let videoAnalysis;
+    try {
+      const videoResponse = await axios.post(
+        "http://127.0.0.1:8000/liveness/level2",
+        videoForm,
+        { 
+          headers: videoForm.getHeaders(),
+          timeout: 120000
+        }
+      );
+      videoAnalysis = videoResponse.data;
+    } catch (videoError: any) {
+      console.error(`[${sessionId}] Video analysis failed:`, videoError.message);
+      videoAnalysis = {
+        success: false,
+        error: videoError.message,
+        aggregated_metrics: {
+          final_humanity_score: 0,
+          final_confidence: 0,
+          final_verdict: "error"
+        },
+        temporal_analysis: {
+          temporal_consistency_score: 0,
+          stability: 'unknown',
+          anomaly_count: 0
+        }
+      };
     }
 
-    // 6️⃣ Generate detailed insights
+    // 4️⃣ Check and extract audio if available
+    let audioAnalysis = null;
+    let hasAudio = false;
+    
+    try {
+      hasAudio = await hasAudioStream(req.file.path);
+      console.log(`[${sessionId}] Audio stream detected: ${hasAudio}`);
+      
+      if (hasAudio) {
+        console.log(`[${sessionId}] Extracting audio...`);
+        const audioPath = await extractAudio(req.file.path, framesDir);
+        
+        // Prepare audio analysis request
+        const audioForm = new FormData();
+        audioForm.append("file", fs.createReadStream(audioPath));
+        
+        // Analyze audio
+        console.log(`[${sessionId}] Analyzing audio...`);
+        try {
+          const audioResponse = await axios.post(
+            "http://127.0.0.1:8000/audio/analyze",
+            audioForm,
+            { 
+              headers: audioForm.getHeaders(),
+              timeout: 30000
+            }
+          );
+          audioAnalysis = audioResponse.data;
+        } catch (audioError: any) {
+          console.warn(`[${sessionId}] Audio analysis failed:`, audioError.message);
+          audioAnalysis = {
+            success: false,
+            error: audioError.message,
+            final_audio_verdict: "analysis_error",
+            confidence: 0
+          };
+        }
+        
+        // Cleanup audio file
+        fs.unlinkSync(audioPath);
+      }
+    } catch (audioExtractError: any) {
+      console.warn(`[${sessionId}] Audio extraction failed:`, audioExtractError.message);
+      hasAudio = false;
+    }
+
+    // 5️⃣ Process video analysis results
+    const videoSuccess = videoAnalysis?.success === true;
+    const videoMetrics = videoAnalysis?.aggregated_metrics || {};
+    const temporalAnalysis = videoAnalysis?.temporal_analysis || {};
+    const frameDetails = videoAnalysis?.frame_details || [];
+    
+    // Calculate video confidence
+    const videoHumanityScore = videoMetrics.final_humanity_score || 0;
+    const videoConfidence = videoMetrics.final_confidence || 0;
+    const temporalScore = temporalAnalysis.temporal_consistency_score || 0;
+    const anomalyCount = temporalAnalysis.anomaly_count || 0;
+    const stability = temporalAnalysis.stability || 'unknown';
+    
+    // Determine video verdict
+    let videoVerdict = "suspicious";
+    if (videoSuccess) {
+      const tempVideoVerdict = videoMetrics.final_verdict;
+      if (tempVideoVerdict === "likely_real" && anomalyCount === 0 && temporalScore > 0.7) {
+        videoVerdict = "authentic";
+      } else if (tempVideoVerdict === "likely_real" && anomalyCount <= 1) {
+        videoVerdict = "likely_authentic";
+      } else if (tempVideoVerdict === "needs_review") {
+        videoVerdict = "needs_review";
+      } else {
+        videoVerdict = "suspicious";
+      }
+    }
+
+    // 6️⃣ Process audio analysis results
+    const audioSuccess = audioAnalysis?.success === true;
+    const audioVerdict = audioAnalysis?.final_audio_verdict || 'unknown';
+    const audioConfidence = audioAnalysis?.confidence || 0;
+    const audioInsights = audioAnalysis?.insights || { strengths: [], anomalies: [] };
+
+    // 7️⃣ Calculate combined results
+    const combinedVerdict = combineVerdicts(videoVerdict, audioAnalysis);
+    const overallConfidence = calculateOverallConfidence(
+      videoConfidence,
+      audioSuccess ? audioConfidence : null,
+      temporalScore
+    );
+
+    // 8️⃣ Generate insights
     const insights = {
       visual: {
-        score: baseHumanity,
-        assessment: baseHumanity > 0.7 ? "strong" : baseHumanity > 0.5 ? "moderate" : "weak"
+        score: videoHumanityScore.toFixed(2),
+        assessment: videoHumanityScore > 0.7 ? "strong" : 
+                   videoHumanityScore > 0.5 ? "moderate" : "weak",
+        confidence: videoConfidence.toFixed(2)
       },
       temporal: {
-        consistency_score: temporalScore,
-        stability: temporalAnalysis.stability || 'unknown',
+        consistency_score: temporalScore.toFixed(2),
+        stability: stability,
         anomalies_detected: anomalyCount,
-        assessment: temporalScore > 0.7 ? "stable" : temporalScore > 0.5 ? "moderate" : "unstable"
+        assessment: temporalScore > 0.7 ? "stable" : 
+                   temporalScore > 0.5 ? "moderate" : "unstable"
       },
-      combined: {
-        final_score: combinedScore,
-        confidence: combinedConfidence,
-        confidence_level: confidenceLevel
+      audio: {
+        available: hasAudio,
+        verdict: audioVerdict,
+        confidence: audioConfidence.toFixed(2),
+        assessment: audioSuccess ? (audioConfidence > 0.7 ? "authentic" : 
+                   audioConfidence > 0.5 ? "likely_authentic" : "questionable") : "not_analyzed"
       }
     };
 
-    // 7️⃣ Anomaly details (if any)
-    const anomalies = aiData.temporal_analysis?.anomaly_timeline || [];
-    const anomalyDetails = anomalies.map((anomaly: any) => ({
+    // 9️⃣ Prepare anomaly timeline
+    const anomalyTimeline = (videoAnalysis.temporal_analysis?.anomaly_timeline || []).map((anomaly: any) => ({
       frame: anomaly.frame_index || 0,
       reason: anomaly.reason || 'unknown',
-      score: anomaly.anomaly_score || 0
+      score: anomaly.anomaly_score?.toFixed(2) || '0.00',
+      timestamp: `${((anomaly.frame_index || 0) / frames.length * 100).toFixed(1)}%`
     }));
 
-    // 8️⃣ Response with temporal insights
+    // 🔟 Prepare frame samples
+    const frameSamples = frameDetails.slice(0, 5).map((frame: any) => ({
+      frame: frame.frame_index || 0,
+      score: frame.humanity_score?.toFixed(2) || '0.00',
+      verdict: frame.verdict || 'unknown',
+      has_anomaly: frame.temporal_metrics?.has_anomaly || false
+    }));
+
+    // 1️⃣1️⃣ Build final response
     const response = {
       success: true,
       session_id: sessionId,
+      processing_info: {
+        file_name: req.file.originalname,
+        file_size: req.file.size,
+        file_type: req.file.mimetype,
+        frames_analyzed: frames.length,
+        audio_analyzed: hasAudio,
+        analysis_modes: ['visual', 'temporal'].concat(hasAudio ? ['audio'] : [])
+      },
       analysis: {
-        type: "video",
-        frames_analyzed: frameResults.length,
-        verdict: verdict,
-        confidence_level: confidenceLevel,
-        temporal_analysis_included: true,
+        final_verdict: combinedVerdict,
+        overall_confidence: overallConfidence.toFixed(2),
+        confidence_level: overallConfidence > 0.8 ? "high" : 
+                        overallConfidence > 0.6 ? "medium" : "low",
         
-        // Core signals
-        signals: {
-          humanityScore: aggregated.humanityScore,
-          confidence: aggregated.confidence,
-          textureVariance: aggregated.textureVariance,
-          edgeDensity: aggregated.edgeDensity,
-          temporalConsistency: temporalScore.toFixed(2),
-          anomalyCount: anomalyCount
+        // Component scores
+        component_scores: {
+          visual_authenticity: videoHumanityScore.toFixed(2),
+          temporal_consistency: temporalScore.toFixed(2),
+          audio_authenticity: audioSuccess ? audioConfidence.toFixed(2) : "N/A",
+          anomaly_count: anomalyCount
         },
         
         // Detailed insights
         insights: insights,
         
+        // Signals (backward compatibility)
+        signals: {
+          humanityScore: videoHumanityScore.toFixed(2),
+          confidence: overallConfidence.toFixed(2),
+          textureVariance: (frameDetails[0]?.visual_metrics?.feature_variance || 0).toFixed(2),
+          edgeDensity: (frameDetails[0]?.visual_metrics?.feature_entropy || 0).toFixed(4),
+          temporalConsistency: temporalScore.toFixed(2),
+          audioQuality: audioSuccess ? audioConfidence.toFixed(2) : "N/A"
+        },
+        
         // Temporal details
         temporal_details: {
           consistency_score: temporalScore.toFixed(2),
-          stability: temporalAnalysis.stability,
+          stability: stability,
           anomaly_count: anomalyCount,
-          anomaly_details: anomalyDetails.slice(0, 5), // First 5 anomalies
-          has_abrupt_changes: frameResults.some((f: any) => 
+          anomaly_timeline: anomalyTimeline,
+          has_abrupt_changes: frameDetails.some((f: any) => 
             f.temporal_metrics?.is_abrupt_change
           )
         },
         
+        // Audio details
+        audio_details: hasAudio ? {
+          verdict: audioVerdict,
+          confidence: audioConfidence.toFixed(2),
+          strengths: audioInsights.strengths || [],
+          anomalies: audioInsights.anomalies || [],
+          available: true
+        } : {
+          available: false,
+          note: "No audio stream detected or extraction failed"
+        },
+        
         // Explainability
-        reasons: aiData.explainability?.key_factors || [
+        explanations: videoAnalysis.explainability?.key_factors || [
           `Visual authenticity: ${insights.visual.assessment}`,
           `Temporal stability: ${insights.temporal.assessment}`,
-          anomalyCount > 0 ? `${anomalyCount} anomalies detected` : "No anomalies detected"
+          anomalyCount > 0 ? `${anomalyCount} temporal anomalies detected` : "No temporal anomalies",
+          hasAudio ? `Audio analysis: ${insights.audio.assessment}` : "Audio: Not available"
         ],
         
-        // Raw data (truncated for performance)
-        frame_samples: frameResults.slice(0, 3).map((frame: any) => ({
-          frame: frame.frame_index,
-          score: frame.humanity_score?.toFixed(2),
-          verdict: frame.verdict
-        }))
+        // Raw samples
+        samples: {
+          frame_samples: frameSamples,
+          anomaly_samples: anomalyTimeline.slice(0, 3)
+        }
+      },
+      metadata: {
+        analysis_version: "2.0.0",
+        features: ['temporal_analysis', 'audio_analysis'],
+        timestamp: new Date().toISOString()
       }
     };
 
-    console.log(`[${sessionId}] Analysis complete: ${verdict} (${confidenceLevel} confidence)`);
+    console.log(`[${sessionId}] Analysis complete: ${combinedVerdict} (${overallConfidence.toFixed(2)} confidence)`);
 
-    // 9️⃣ Cleanup
+    // 1️⃣2️⃣ Cleanup
     try {
       // Clean frames
       frames.forEach(framePath => {
@@ -200,28 +350,30 @@ router.post("/analyze-media", upload.single("file"), async (req, res) => {
       }
       
       console.log(`[${sessionId}] Cleanup completed`);
-    } catch (cleanupError) {
-      console.warn(`[${sessionId}] Cleanup warning:`, cleanupError);
+    } catch (cleanupError: any) {
+      console.warn(`[${sessionId}] Cleanup warning:`, cleanupError.message);
     }
 
     return res.json(response);
 
-  } catch (err: any) {
-    console.error(`[${sessionId}] Analysis error:`, err);
+  } catch (error: any) {
+    console.error(`[${sessionId}] Analysis error:`, error);
     
-    // Fallback analysis if AI service fails
-    const fallbackResponse = {
+    // Error response
+    const errorResponse = {
       success: false,
+      session_id: sessionId,
       error: "Video analysis failed",
-      error_details: err.message,
+      error_details: error.message,
+      timestamp: new Date().toISOString(),
       fallback_analysis: {
         verdict: "needs_review",
         confidence_level: "low",
-        note: "Using fallback analysis due to AI service error"
+        note: "Using fallback analysis due to processing error"
       }
     };
 
-    // Cleanup even on error
+    // Cleanup on error
     try {
       if (fs.existsSync(framesDir)) {
         fs.rmSync(framesDir, { recursive: true, force: true });
@@ -229,12 +381,23 @@ router.post("/analyze-media", upload.single("file"), async (req, res) => {
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
-    } catch (cleanupError) {
-      console.warn("Cleanup failed after error:", cleanupError);
+    } catch (cleanupError: any) {
+      console.warn(`[${sessionId}] Cleanup failed after error:`, cleanupError.message);
     }
 
-    return res.status(500).json(fallbackResponse);
+    return res.status(500).json(errorResponse);
   }
+});
+
+// Health check endpoint
+router.get("/health", (req, res) => {
+  res.json({
+    status: "healthy",
+    service: "Protocol Aura Analysis Service",
+    version: "2.0.0",
+    features: ["video_analysis", "temporal_analysis", "audio_analysis"],
+    timestamp: new Date().toISOString()
+  });
 });
 
 export default router;

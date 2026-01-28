@@ -1,115 +1,52 @@
-// server/index.ts
-import express, { Request, Response, NextFunction } from "express";
+// File: server/index.ts (REPLACED VERSION - WITH PORT 5000)
+import express from "express";
 import { createServer } from "http";
 import { Server as SocketServer } from "socket.io";
-import multer from "multer";
-import axios from "axios";
-import FormData from "form-data";
+import cors from "cors";
+import analyzeRoutes from "../src/routes/analyze";
 
 const app = express();
 const httpServer = createServer(app);
 
-// Multer memory storage for uploads
-const upload = multer({ storage: multer.memoryStorage() });
-
-// Map to store analysis results
-const analysisResults = new Map<
-  string,
-  { status: "processing" | "complete" | "error"; results?: any }
->();
-
 // Middleware
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// Logging helper
-function log(message: string) {
+// Logging middleware
+app.use((req, res, next) => {
   const time = new Date().toLocaleTimeString();
-  console.log(`[${time}] ${message}`);
-}
+  console.log(`[${time}] ${req.method} ${req.url}`);
+  next();
+});
 
 // Health endpoint
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "healthy", service: "Protocol Aura", version: "1.0.0" });
+  res.json({
+    status: "healthy",
+    service: "Protocol Aura Analysis Service",
+    version: "2.0.0",
+    features: ["video_analysis", "temporal_analysis", "audio_analysis"],
+    timestamp: new Date().toISOString()
+  });
 });
 
-// --- Level 2: File upload and forward to Python ---
-app.post(
-  "/api/analyze-media",
-  upload.single("file"),
-  async (req: Request & { file?:Express.Multer.File }, res) => {
-    const file = req.file;
-    const analysisId = req.body.analysisId;
+// Use the new analyze routes
+app.use("/api", analyzeRoutes);
 
-    if (!file || !analysisId) {
-      return res.status(400).json({ error: "File and analysisId are required" });
-    }
-
-    try {
-      const form = new FormData();
-      form.append("file", file.buffer, { filename: file.originalname });
-
-      // Forward to Python AI service
-      const response = await axios.post("http://localhost:8000/analyze", form, {
-        headers: form.getHeaders(),
-      });
-
-      // Store the result
-      analysisResults.set(analysisId, { status: "complete", results: response.data });
-
-      return res.json({ success: true, analysisId, message: "Analysis started" });
-    } catch (err: any) {
-      console.error("Python service error:", err.message || err);
-      analysisResults.set(analysisId, { status: "error" });
-      return res.status(500).json({ error: "Python service request failed" });
-    }
-  }
-);
-
-// Get analysis result
-app.get("/api/analysis-result/:id", (req, res) => {
-  const analysisId = req.params.id;
-  const result = analysisResults.get(analysisId);
-  if (!result) return res.status(404).json({ error: "Analysis not found" });
-  res.json(result);
+// Socket.IO for liveness (optional - for future Step 5)
+const io = new SocketServer(httpServer, {
+  cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// --- Socket.IO Liveness streaming ---
-const io = new SocketServer(httpServer, { cors: { origin: "*", methods: ["GET", "POST"] } });
-
-// Store intervals for live streaming
 const livenessIntervals = new Map<string, NodeJS.Timeout>();
 
 io.on("connection", (socket) => {
-  log(`Client connected: ${socket.id}`);
+  console.log(`[Socket] Client connected: ${socket.id}`);
 
   socket.on("start-liveness", async (data: { frame?: Buffer }) => {
-    if (livenessIntervals.has(socket.id)) {
-      clearInterval(livenessIntervals.get(socket.id)!);
-    }
-
-    const sendSignals = async () => {
-      try {
-        if (!data.frame) return;
-
-        const form = new FormData();
-        form.append("file", data.frame, { filename: "frame.jpg" });
-
-        // Call Python liveness endpoint
-        const response = await axios.post("http://localhost:8000/liveness", form, {
-          headers: form.getHeaders(),
-        });
-
-        socket.emit("liveness-signals", response.data);
-      } catch (err) {
-        console.error("Error fetching liveness from Python:", err);
-      }
-    };
-
-    // Send immediately and then every 500ms
-    await sendSignals();
-    const interval = setInterval(sendSignals, 500);
-    livenessIntervals.set(socket.id, interval);
+    // TODO: Implement Step 5 - Liveness streaming
+    console.log(`[Socket] Start liveness requested from ${socket.id}`);
   });
 
   socket.on("stop-liveness", () => {
@@ -117,6 +54,7 @@ io.on("connection", (socket) => {
       clearInterval(livenessIntervals.get(socket.id)!);
       livenessIntervals.delete(socket.id);
     }
+    console.log(`[Socket] Liveness stopped for ${socket.id}`);
   });
 
   socket.on("disconnect", () => {
@@ -124,10 +62,45 @@ io.on("connection", (socket) => {
       clearInterval(livenessIntervals.get(socket.id)!);
       livenessIntervals.delete(socket.id);
     }
-    log(`Client disconnected: ${socket.id}`);
+    console.log(`[Socket] Client disconnected: ${socket.id}`);
   });
 });
 
-// --- Start server ---
+// Root endpoint
+app.get("/", (_req, res) => {
+  res.json({
+    message: "Protocol Aura Analysis API",
+    version: "2.0.0",
+    endpoints: {
+      "POST /api/analyze-media": "Analyze video with temporal & audio analysis",
+      "GET /api/health": "Health check",
+      "GET /": "This information"
+    }
+  });
+});
+
+// Error handling
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error("Server error:", err);
+  res.status(500).json({
+    error: "Internal server error",
+    message: err.message
+  });
+});
+
+// Start server - PORT 5000 as you're used to
 const PORT = parseInt(process.env.PORT || "5000", 10);
-httpServer.listen(PORT, () => log(`Node.js server running on http://localhost:${PORT}`));
+httpServer.listen(PORT, () => {
+  console.log(`=================================`);
+  console.log(`🚀 Protocol Aura Server v2.0.0`);
+  console.log(`📡 Port: ${PORT}`);
+  console.log(`🔗 Endpoints:`);
+  console.log(`   POST /api/analyze-media - Video analysis`);
+  console.log(`   GET  /api/health        - Health check`);
+  console.log(`   GET  /                  - API info`);
+  console.log(`🔬 Features:`);
+  console.log(`   ✓ Visual authenticity detection`);
+  console.log(`   ✓ Temporal consistency analysis`);
+  console.log(`   ✓ Audio authenticity verification`);
+  console.log(`=================================`);
+});

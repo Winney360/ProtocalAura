@@ -1,4 +1,4 @@
-# File: ai_service/analysis/temporal.py
+# File: ai_service/analysis/temporal.py (UPDATED with imports)
 """
 Temporal Analysis Module for Protocol Aura
 Step 3: Frame-to-frame consistency analysis
@@ -41,16 +41,24 @@ class TemporalAnalyzer:
         reason = "normal"
         
         if len(self.drift_history) >= 5:
-            avg_drift = np.mean(self.drift_history[-5:])
+            recent_drifts = self.drift_history[-5:] if len(self.drift_history) >= 5 else self.drift_history
+            avg_drift = np.mean(recent_drifts) if recent_drifts else 0
+            
+            # Check for unusual changes
             if drift > avg_drift * 2.5:  # Simple threshold
                 is_anomaly = True
                 reason = "unusual_frame_change"
                 if is_abrupt:
                     reason += "|abrupt_jump"
+            
+            # Also check for very low similarity (sudden complete change)
+            if drift > 0.3:
+                is_anomaly = True
+                reason = "extreme_frame_change"
         
         if is_anomaly:
             self.anomaly_timeline.append({
-                'frame': len(self.drift_history),
+                'frame_index': len(self.drift_history),
                 'drift': drift,
                 'reason': reason
             })
@@ -66,21 +74,39 @@ class TemporalAnalyzer:
     def get_summary(self) -> Dict:
         """Get overall temporal summary."""
         if not self.drift_history:
-            return {'temporal_consistency_score': 0.0, 'anomaly_count': 0}
+            return {
+                'temporal_consistency_score': 0.0,
+                'anomaly_count': 0,
+                'stability': 'unknown',
+                'average_drift': 0.0,
+                'total_frames': 0
+            }
         
         drifts = np.array(self.drift_history)
         avg_drift = float(np.mean(drifts))
+        drift_std = float(np.std(drifts)) if len(drifts) > 1 else 0.0
         
-        # Consistency score: lower drift = higher consistency
-        consistency_score = max(0.0, 1.0 - (avg_drift * 3.0))
+        # Consistency score: lower drift and lower std = higher consistency
+        consistency_score = max(0.0, 1.0 - (avg_drift * 2.0 + drift_std * 3.0))
+        
+        # Determine stability
+        if consistency_score > 0.8:
+            stability = "high"
+        elif consistency_score > 0.6:
+            stability = "medium"
+        elif consistency_score > 0.4:
+            stability = "low"
+        else:
+            stability = "unstable"
         
         return {
             'temporal_consistency_score': consistency_score,
+            'stability': stability,
             'average_drift': avg_drift,
+            'drift_standard_deviation': drift_std,
             'anomaly_count': len(self.anomaly_timeline),
-            'stability': 'high' if consistency_score > 0.7 else 
-                        'medium' if consistency_score > 0.5 else 'low',
-            'total_frames': len(self.drift_history)
+            'total_frames': len(self.drift_history),
+            'anomaly_timeline': self.anomaly_timeline[-10:] if self.anomaly_timeline else []
         }
     
     def _calculate_drift(self) -> float:
@@ -91,15 +117,18 @@ class TemporalAnalyzer:
         emb1 = self.frame_embeddings[-2].flatten()
         emb2 = self.frame_embeddings[-1].flatten()
         
-        # Cosine distance
+        # Normalize vectors
         norm1 = np.linalg.norm(emb1)
         norm2 = np.linalg.norm(emb2)
         
         if norm1 == 0 or norm2 == 0:
             return 0.0
         
+        # Cosine similarity
         cosine_sim = np.dot(emb1/norm1, emb2/norm2)
-        return float(max(0.0, 1.0 - cosine_sim))
+        # Ensure valid range and calculate distance
+        drift = max(0.0, 1.0 - cosine_sim)
+        return float(drift)
     
     def _empty_response(self) -> Dict:
         return {
