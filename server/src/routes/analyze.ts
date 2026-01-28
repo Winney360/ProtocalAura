@@ -91,7 +91,7 @@ router.post("/analyze-media", upload.single("file"), async (req, res) => {
     let videoAnalysis;
     try {
       const videoResponse = await axios.post(
-        "http://127.0.0.1:8000/liveness/level2",
+        "http://localhost:8000/liveness/level2",
         videoForm,
         { 
           headers: videoForm.getHeaders(),
@@ -137,7 +137,7 @@ router.post("/analyze-media", upload.single("file"), async (req, res) => {
         console.log(`[${sessionId}] Analyzing audio...`);
         try {
           const audioResponse = await axios.post(
-            "http://127.0.0.1:8000/audio/analyze",
+            "http://localhost:8000/audio/analyze",
             audioForm,
             { 
               headers: audioForm.getHeaders(),

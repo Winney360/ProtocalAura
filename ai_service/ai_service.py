@@ -1,4 +1,4 @@
-# File: ai_service/ai_service.py (COMPLETE with Audio Analysis)
+# File: ai_service/ai_service.py (COMPLETE with Enhanced Explainability)
 import tempfile
 import os
 from fastapi import FastAPI, File, UploadFile, HTTPException
@@ -48,6 +48,232 @@ transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
+
+# ========== ENHANCED EXPLAINABILITY FUNCTIONS ==========
+def generate_detailed_explanations(frame_results: List[Dict], 
+                                  temporal_summary: Dict,
+                                  visual_score: float,
+                                  temporal_score: float,
+                                  anomaly_count: int,
+                                  final_verdict: str,
+                                  final_confidence: float) -> Dict[str, Any]:
+    """Generate detailed explanations with confidence breakdown."""
+    
+    explanations = []
+    confidence_breakdown = []
+    anomaly_details = []
+    frame_markers = []
+    key_findings = []
+    
+    # 1. Visual analysis breakdown
+    visual_explanations = []
+    if frame_results:
+        # Get metrics from first frame
+        first_frame = frame_results[0] if frame_results else {}
+        visual_metrics = first_frame.get('visual_metrics', {})
+        
+        variance = visual_metrics.get('feature_variance', 0)
+        entropy = visual_metrics.get('feature_entropy', 0)
+        
+        if variance > 8:
+            visual_explanations.append("Rich texture complexity (natural)")
+            key_findings.append("High texture complexity")
+        elif variance < 3:
+            visual_explanations.append("Low texture complexity (potentially synthetic)")
+            key_findings.append("Low texture complexity")
+        
+        if 3.5 < entropy < 4.5:
+            visual_explanations.append("Natural visual entropy")
+            key_findings.append("Natural visual patterns")
+        elif entropy < 3:
+            visual_explanations.append("Simplified visual patterns")
+            key_findings.append("Simplified patterns")
+    
+    # 2. Visual score explanation
+    if visual_score > 0.7:
+        explanations.append("✅ **High Visual Authenticity**")
+        visual_confidence = 0.8
+        visual_impact = "positive"
+    elif visual_score > 0.5:
+        explanations.append("⚠️ **Moderate Visual Authenticity**")
+        visual_confidence = 0.6
+        visual_impact = "neutral"
+    else:
+        explanations.append("❌ **Low Visual Authenticity**")
+        visual_confidence = 0.3
+        visual_impact = "negative"
+    
+    confidence_breakdown.append({
+        "factor": "Visual Analysis",
+        "score": float(visual_score),
+        "confidence": float(visual_confidence),
+        "weight": 40,
+        "impact": visual_impact,
+        "details": visual_explanations
+    })
+    
+    # 3. Temporal analysis breakdown
+    temporal_explanations = []
+    stability = temporal_summary.get('stability', 'unknown')
+    avg_drift = temporal_summary.get('average_drift', 0)
+    
+    if stability == "high":
+        explanations.append("✅ **Excellent Temporal Consistency**")
+        temporal_explanations.append("Smooth frame transitions")
+        temporal_confidence = 0.9
+        temporal_impact = "positive"
+    elif stability == "medium":
+        explanations.append("⚠️ **Good Temporal Consistency**")
+        temporal_explanations.append("Minor inconsistencies")
+        temporal_confidence = 0.7
+        temporal_impact = "neutral"
+    else:
+        explanations.append("❌ **Poor Temporal Consistency**")
+        temporal_explanations.append("Unnatural frame transitions")
+        temporal_confidence = 0.4
+        temporal_impact = "negative"
+    
+    if avg_drift < 0.05:
+        temporal_explanations.append("Minimal frame-to-frame changes")
+    elif avg_drift > 0.15:
+        temporal_explanations.append("Large frame-to-frame changes detected")
+        key_findings.append("High frame drift")
+    
+    confidence_breakdown.append({
+        "factor": "Temporal Analysis",
+        "score": float(temporal_score),
+        "confidence": float(temporal_confidence),
+        "weight": 30,
+        "impact": temporal_impact,
+        "details": temporal_explanations
+    })
+    
+    # 4. Anomaly detection breakdown
+    anomaly_explanations = []
+    if anomaly_count == 0:
+        explanations.append("✅ **No Anomalies Detected**")
+        anomaly_confidence = 1.0
+        anomaly_impact = "positive"
+        anomaly_explanations.append("Consistent throughout video")
+    elif anomaly_count == 1:
+        explanations.append("⚠️ **1 Anomaly Detected**")
+        anomaly_confidence = 0.7
+        anomaly_impact = "neutral"
+        anomaly_explanations.append("Minor irregularity found")
+    else:
+        explanations.append(f"❌ **{anomaly_count} Anomalies Detected**")
+        anomaly_confidence = max(0.3, 1.0 - (anomaly_count * 0.1))
+        anomaly_impact = "negative"
+        anomaly_explanations.append(f"Multiple irregularities ({anomaly_count} total)")
+        key_findings.append(f"{anomaly_count} anomalies found")
+    
+    # Get anomaly timeline
+    anomaly_timeline = temporal_summary.get('anomaly_timeline', [])
+    for anomaly in anomaly_timeline[:3]:  # Show top 3 anomalies
+        anomaly_details.append({
+            "frame": anomaly.get('frame_index', 0),
+            "reason": anomaly.get('reason', 'unknown').replace('_', ' ').title(),
+            "score": float(anomaly.get('drift', 0))
+        })
+    
+    confidence_breakdown.append({
+        "factor": "Anomaly Detection",
+        "anomaly_count": anomaly_count,
+        "confidence": float(anomaly_confidence),
+        "weight": 30,
+        "impact": anomaly_impact,
+        "details": anomaly_explanations
+    })
+    
+    # 5. Frame markers for suspicious frames
+    suspicious_threshold = 0.4
+    for i, frame in enumerate(frame_results[:20]):  # Check first 20 frames
+        score = frame.get('humanity_score', 0)
+        if score < suspicious_threshold:
+            severity = 'high' if score < 0.3 else 'medium'
+            frame_markers.append({
+                'frame': i,
+                'score': float(score),
+                'severity': severity,
+                'reason': 'Low visual authenticity score'
+            })
+    
+    # 6. Calculate overall confidence
+    overall_confidence = (
+        (visual_confidence * 0.4) +
+        (temporal_confidence * 0.3) +
+        (anomaly_confidence * 0.3)
+    )
+    
+    # 7. Generate recommendation
+    recommendation = ""
+    if final_verdict == "likely_real" and overall_confidence > 0.8:
+        recommendation = "✅ **HIGH CONFIDENCE**: Content appears authentic"
+    elif final_verdict == "likely_real":
+        recommendation = "✅ **LIKELY AUTHENTIC**: Minor concerns detected"
+    elif final_verdict == "needs_review":
+        recommendation = "⚠️ **REVIEW RECOMMENDED**: Further verification needed"
+    elif final_verdict == "suspicious":
+        recommendation = "❌ **SUSPICIOUS**: Strong indicators of manipulation"
+    else:
+        recommendation = "🔍 **ANALYSIS INCONCLUSIVE**: Insufficient data"
+    
+    # 8. Generate summary
+    summary_parts = []
+    if visual_score > 0.7:
+        summary_parts.append("high visual authenticity")
+    elif visual_score < 0.4:
+        summary_parts.append("low visual authenticity")
+    
+    if stability == "high":
+        summary_parts.append("excellent temporal consistency")
+    elif stability == "low" or stability == "unstable":
+        summary_parts.append("poor temporal consistency")
+    
+    if anomaly_count > 0:
+        summary_parts.append(f"{anomaly_count} anomaly{'s' if anomaly_count != 1 else ''} detected")
+    
+    summary = "Content shows " + ", ".join(summary_parts) if summary_parts else "Analysis complete"
+    
+    return {
+        "explanations": explanations,
+        "confidence_breakdown": confidence_breakdown,
+        "anomaly_details": anomaly_details,
+        "frame_markers": frame_markers[:5],  # Top 5 suspicious frames
+        "key_findings": key_findings,
+        "recommendation": recommendation,
+        "summary": summary,
+        "overall_confidence": float(overall_confidence),
+        "calculated_confidence": float(final_confidence)
+    }
+
+def generate_audio_explanations(audio_analysis: Dict) -> Dict[str, Any]:
+    """Generate detailed audio explanations."""
+    if not audio_analysis.get('success', False):
+        return {
+            "available": False,
+            "note": "Audio analysis not available"
+        }
+    
+    explanations = []
+    audio_score = audio_analysis.get('authenticity_scores', {}).get('overall_authenticity', 0)
+    insights = audio_analysis.get('insights', {})
+    
+    if audio_score > 0.7:
+        explanations.append("✅ **Authentic Audio** - Natural voice characteristics")
+    elif audio_score > 0.5:
+        explanations.append("⚠️ **Questionable Audio** - Some synthetic characteristics")
+    else:
+        explanations.append("❌ **Synthetic Audio** - Strong AI indicators")
+    
+    return {
+        "available": True,
+        "explanations": explanations,
+        "score": float(audio_score),
+        "strengths": insights.get('strengths', []),
+        "anomalies": insights.get('anomalies', []),
+        "recommendations": insights.get('recommendations', [])
+    }
 
 def extract_features(image: Image.Image) -> np.ndarray:
     """Extract ResNet-18 features."""
@@ -132,67 +358,6 @@ def calculate_humanity_score(metrics: Dict[str, float]) -> Dict[str, float]:
     except Exception as e:
         logger.error(f"Score calculation error: {e}")
         return {'humanity_score': 0.5, 'confidence': 0.5}
-
-def generate_explanations(frame_results: List[Dict], temporal_summary: Dict) -> List[str]:
-    """Generate human-readable explanations."""
-    factors = []
-    
-    # Visual metrics explanations
-    if frame_results:
-        visual_scores = [r['humanity_score'] for r in frame_results if 'humanity_score' in r]
-        avg_visual = np.mean(visual_scores) if visual_scores else 0
-        
-        if avg_visual > 0.7:
-            factors.append("High visual authenticity")
-        elif avg_visual > 0.5:
-            factors.append("Moderate visual authenticity")
-        else:
-            factors.append("Low visual authenticity")
-    
-    # Temporal explanations
-    if temporal_summary:
-        stability = temporal_summary.get('stability', 'unknown')
-        if stability == "high":
-            factors.append("Excellent temporal consistency")
-        elif stability == "medium":
-            factors.append("Good temporal consistency")
-        elif stability == "low":
-            factors.append("Poor temporal consistency")
-        else:
-            factors.append("Unstable temporal patterns")
-        
-        # Anomaly explanations
-        anomaly_count = temporal_summary.get('anomaly_count', 0)
-        if anomaly_count == 0:
-            factors.append("No temporal anomalies detected")
-        else:
-            factors.append(f"{anomaly_count} temporal anomalies detected")
-        
-        abrupt_changes = any(
-            frame.get('temporal_metrics', {}).get('is_abrupt_change', False)
-            for frame in frame_results
-        )
-        if abrupt_changes:
-            factors.append("Contains abrupt visual changes")
-    
-    return factors if factors else ["Insufficient data for detailed analysis"]
-
-def generate_recommendation(final_verdict: str, temporal_summary: Dict) -> str:
-    """Generate recommendation based on analysis."""
-    if final_verdict == "likely_real":
-        return "Content appears authentic with high confidence"
-    elif final_verdict == "needs_review":
-        anomaly_count = temporal_summary.get('anomaly_count', 0)
-        if anomaly_count > 0:
-            return "Review recommended due to detected anomalies"
-        else:
-            return "Review recommended for additional verification"
-    else:
-        anomaly_count = temporal_summary.get('anomaly_count', 0)
-        if anomaly_count > 3:
-            return "High suspicion: Multiple temporal anomalies detected"
-        else:
-            return "Content shows signs of manipulation"
 
 def combine_verdicts(video_response: Dict, audio_response: Optional[Dict]) -> Dict:
     """Combine video and audio analysis for final verdict."""
@@ -337,9 +502,16 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
             final_confidence = 0.0
             final_verdict = "error"
         
-        # Generate explanations
-        key_factors = generate_explanations(frame_results, temporal_summary)
-        recommendation = generate_recommendation(final_verdict, temporal_summary)
+        # Generate ENHANCED explanations with explainability
+        explainability = generate_detailed_explanations(
+            frame_results=frame_results,
+            temporal_summary=temporal_summary,
+            visual_score=float(avg_humanity),
+            temporal_score=float(temporal_score),
+            anomaly_count=anomaly_count,
+            final_verdict=final_verdict,
+            final_confidence=final_confidence
+        )
         
         processing_time = time.time() - start_time
         
@@ -357,10 +529,7 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
             },
             "temporal_analysis": temporal_summary,
             "frame_details": frame_results[:10],  # Limit to first 10 frames
-            "explainability": {
-                "key_factors": key_factors,
-                "recommendation": recommendation
-            }
+            "explainability": explainability  # Enhanced explainability
         }
         
         logger.info(f"Video analysis completed in {processing_time:.2f}s: {final_verdict}")
@@ -386,6 +555,10 @@ async def analyze_audio(file: UploadFile = File(...)):
         # Analyze audio
         result = audio_analyzer.analyze_audio(tmp_path)
         result['processing_time'] = time.time() - start_time
+        
+        # Add audio explanations
+        audio_explanations = generate_audio_explanations(result)
+        result['explainability'] = audio_explanations
         
         # Cleanup
         os.unlink(tmp_path)
@@ -418,12 +591,20 @@ async def analyze_combined(
         # Combine results
         combined_verdict = combine_verdicts(video_response, audio_response)
         
+        # Combine explainability
+        combined_explainability = {
+            "video": video_response.get('explainability', {}),
+            "audio": audio_response.get('explainability', {}) if audio_response else {"available": False},
+            "combined_verdict": combined_verdict
+        }
+        
         response = {
             'success': True,
             'processing_time': time.time() - start_time,
             'video_analysis': video_response,
             'audio_analysis': audio_response if audio_response else {'available': False},
             'combined_verdict': combined_verdict,
+            'explainability': combined_explainability,
             'multimodal_analysis': True,
             'modes_analyzed': ['visual', 'temporal'] + (['audio'] if audio_response else [])
         }
@@ -443,7 +624,7 @@ async def health_check():
         "status": "healthy",
         "service": "Protocol Aura AI Service",
         "version": "2.0.0",
-        "features": ["visual_analysis", "temporal_analysis", "audio_analysis"],
+        "features": ["visual_analysis", "temporal_analysis", "audio_analysis", "explainability"],
         "timestamp": time.time()
     }
 
@@ -465,6 +646,7 @@ async def root():
             "Visual authenticity detection",
             "Temporal consistency analysis",
             "Audio authenticity verification",
+            "Explainability and human-readable insights",
             "Multimodal deepfake detection"
         ]
     }
