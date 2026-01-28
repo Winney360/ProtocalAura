@@ -1,7 +1,7 @@
 import type { Express, Request } from "express";
 import type { Server } from "http";
 import { Server as SocketServer } from "socket.io";
-import multer, { type Multer } from 'multer';
+import multer from "multer";
 import axios from "axios";
 import FormData from "form-data";
 import type { LivenessSignals, PostHocAnalysis } from "@shared/schema";
@@ -73,7 +73,7 @@ export async function registerRoutes(
   app.post(
     "/api/analyze-media",
     upload.single("file"),
-    async (req: Request & { file?: Multer.File }, res) => {
+    async (req: Request & { file?: Express.Multer.File }, res) => {
 
       if (!req.file) {
         return res.status(400).json({ error: "File is required" });

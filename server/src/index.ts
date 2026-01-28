@@ -2,7 +2,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import { createServer } from "http";
 import { Server as SocketServer } from "socket.io";
-import multer, { type Multer } from 'multer';
+import multer from "multer";
 import axios from "axios";
 import FormData from "form-data";
 
@@ -37,7 +37,7 @@ app.get("/api/health", (_req, res) => {
 app.post(
   "/api/analyze-media",
   upload.single("file"),
-  async (req: Request & { file?:Multer.File }, res) => {
+  async (req: Request & { file?:Express.Multer.File }, res) => {
     const file = req.file;
     const analysisId = req.body.analysisId;
 
