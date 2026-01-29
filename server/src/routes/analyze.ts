@@ -10,31 +10,70 @@ import { extractAudio, hasAudioStream } from "../utils/extractAudio";
 const router = Router();
 const upload = multer({ dest: "uploads/" });
 
-// Helper function to combine verdicts
+// Helper function to combine verdicts - Decisive multimodal logic
 const combineVerdicts = (videoVerdict: string, audioAnalysis: any): string => {
   if (!audioAnalysis || !audioAnalysis.success) {
     return videoVerdict;
   }
   
   const audioVerdict = audioAnalysis.final_audio_verdict || 'unknown';
+  const audioConfidence = audioAnalysis.confidence || 0;
   
-  // Combined logic
+  // DECISIVE LOGIC: Audio must have HIGH confidence (0.50+) to override good video
+  // Weak audio signals (< 0.50) don't override strong video signals
+  
+  // Both good = clearly authentic
   if (videoVerdict === "authentic" && audioVerdict === "likely_authentic") {
-    return "highly_authentic";
+    return "authentic";
   }
   
-  if (videoVerdict === "highly_authentic" && audioVerdict === "likely_authentic") {
-    return "highly_authentic";
+  if (videoVerdict === "likely_real" && audioVerdict === "likely_authentic") {
+    return "likely_authentic";
   }
   
-  if (videoVerdict === "suspicious" || audioVerdict === "suspicious") {
-    return "suspicious";
+  // Audio is HIGHLY confident about synthesis (> 0.60) = override video
+  if (audioVerdict === "suspicious" && audioConfidence > 0.60) {
+    return "likely_synthetic";  // Audio is confident - trust it
   }
   
-  if (videoVerdict === "needs_review" || audioVerdict === "needs_review") {
+  // Both clearly bad with strong audio = clearly synthetic
+  if (videoVerdict === "suspicious" && audioVerdict === "suspicious" && audioConfidence > 0.50) {
+    return "synthetic";
+  }
+  
+  if ((videoVerdict === "suspicious" || videoVerdict === "likely_synthetic") && 
+      audioConfidence > 0.60) {
+    return "likely_synthetic";
+  }
+  
+  // If video is good/real but audio is suspicious with LOW confidence (< 0.50)
+  // Trust video instead - audio is uncertain
+  if ((videoVerdict === "authentic" || videoVerdict === "likely_real") && 
+      audioVerdict === "suspicious" && audioConfidence < 0.50) {
+    return "likely_authentic";  // Audio uncertainty doesn't override good video
+  }
+  
+  // One good, one bad = needs review ONLY if audio has medium-high confidence (0.50-0.60)
+  if ((videoVerdict === "suspicious" || audioVerdict === "suspicious") && 
+      audioConfidence >= 0.50 && audioConfidence < 0.60) {
     return "needs_review";
   }
   
+  if (videoVerdict === "needs_review") {
+    // Only pass through "needs_review" if truly inconclusive
+    return "needs_review";
+  }
+  
+  // Default: trust the clearer signal
+  if (videoVerdict === "authentic" || videoVerdict === "likely_real") {
+    return "likely_authentic";
+  }
+  
+  if (videoVerdict === "synthetic" || videoVerdict === "likely_synthetic") {
+    return "likely_synthetic";
+  }
+  
+  // Final fallback
   return videoVerdict;
 };
 
