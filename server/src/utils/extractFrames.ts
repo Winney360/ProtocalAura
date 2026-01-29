@@ -1,7 +1,27 @@
-// File: server/src/utils/extractFrames.ts (UPDATED)
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
+import * as dotenv from 'dotenv'; 
+
+// Load environment variables
+dotenv.config();
+
+const ffmpegPath = process.env.FFMPEG_PATH;
+const ffprobePath = process.env.FFPROBE_PATH;
+
+if (ffmpegPath) {
+  ffmpeg.setFfmpegPath(ffmpegPath);
+  console.log(`[extractFrames] FFmpeg path configured: ${ffmpegPath}`);
+} else {
+  console.warn('[extractFrames] FFMPEG_PATH not set in environment variables');
+}
+
+if (ffprobePath) {
+  ffmpeg.setFfprobePath(ffprobePath);
+  console.log(`[extractFrames] FFprobe path configured: ${ffprobePath}`);
+} else {
+  console.warn('[extractFrames] FFPROBE_PATH not set in environment variables');
+}
 
 export const extractFrames = (
   videoPath: string,
@@ -13,9 +33,10 @@ export const extractFrames = (
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    // First get video duration
+    // First get video duration using ffprobe
     ffmpeg.ffprobe(videoPath, (err, metadata) => {
       if (err) {
+        console.error(`[extractFrames] FFprobe error: ${err.message}`);
         reject(err);
         return;
       }
@@ -35,6 +56,9 @@ export const extractFrames = (
           `-vsync`, `vfr`               // Variable frame rate
         ])
         .output(path.join(outputDir, "frame_%03d.jpg"))
+        .on("start", (commandLine) => {
+          console.log(`[extractFrames] FFmpeg command: ${commandLine}`);
+        })
         .on("end", () => {
           // Read all extracted frames
           fs.readdir(outputDir, (err, files) => {
@@ -54,10 +78,14 @@ export const extractFrames = (
               .slice(0, frameCount) // Ensure we don't exceed requested count
               .map(file => path.join(outputDir, file));
             
+            console.log(`[extractFrames] Extracted ${frameFiles.length} frames`);
             resolve(frameFiles);
           });
         })
-        .on("error", reject)
+        .on("error", (err) => {
+          console.error(`[extractFrames] FFmpeg error: ${err.message}`);
+          reject(err);
+        })
         .run();
     });
   });

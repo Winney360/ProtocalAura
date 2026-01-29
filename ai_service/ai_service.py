@@ -1,18 +1,17 @@
-# File: ai_service/ai_service.py (COMPLETE with Enhanced Explainability)
+# File: ai_service/ai_service.py (COMPLETE - NO TORCH VERSION)
 import tempfile
 import os
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
-import torch
-import torchvision.models as models
-import torchvision.transforms as transforms
-from PIL import Image
+from PIL import Image, ImageFilter
 import io
 import logging
 from typing import List, Dict, Any, Optional
 import time
 from scipy import stats
+import cv2
+from skimage.feature import local_binary_pattern
 
 # Import analyzers
 from analysis.audio import AudioAnalyzer
@@ -32,22 +31,145 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize models
-device = torch.device("cpu")
-resnet = models.resnet18(pretrained=True)
-resnet.eval()
-resnet.to(device)
-feature_extractor = torch.nn.Sequential(*list(resnet.children())[:-1])
-
 # Initialize analyzers
 audio_analyzer = AudioAnalyzer(sample_rate=22050)
 
-# Image transformation
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-])
+# ========== HANDCRAFTED FEATURE EXTRACTION FUNCTIONS ==========
+def extract_handcrafted_features(image: Image.Image) -> np.ndarray:
+    """Extract handcrafted visual features without PyTorch."""
+    try:
+        # Convert PIL Image to grayscale numpy array for most analyses
+        img_gray = np.array(image.convert('L')).astype(np.float32)
+        
+        # Calculate multiple feature types
+        features = []
+        
+        # 1. BASIC STATISTICS
+        features.extend([
+            np.mean(img_gray),           # Brightness
+            np.std(img_gray),            # Contrast
+            np.var(img_gray),            # Variance
+            stats.skew(img_gray.flatten()),   # Distribution symmetry
+            stats.kurtosis(img_gray.flatten()) # Distribution tails
+        ])
+        
+        # 2. EDGE FEATURES (Canny edge detection)
+        edges = cv2.Canny(img_gray.astype(np.uint8), 50, 150)
+        features.extend([
+            np.mean(edges),                     # Edge strength
+            np.var(edges),                      # Edge consistency
+            np.sum(edges > 0) / edges.size      # Edge density (0-1)
+        ])
+        
+        # 3. TEXTURE FEATURES (Local Binary Patterns)
+        radius = 2
+        n_points = 8 * radius
+        lbp = local_binary_pattern(img_gray, n_points, radius, method='uniform')
+        hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, n_points + 3), density=True)
+        features.extend(hist[:5])  # Use first 5 histogram bins as texture features
+        
+        # 4. FREQUENCY DOMAIN FEATURES (FFT analysis)
+        fft = np.fft.fft2(img_gray)
+        fft_shift = np.fft.fftshift(fft)
+        magnitude_spectrum = np.log(np.abs(fft_shift) + 1)
+        features.extend([
+            np.mean(magnitude_spectrum),
+            np.std(magnitude_spectrum),
+            np.var(magnitude_spectrum)
+        ])
+        
+        # 5. COLOR FEATURES (if color image)
+        if image.mode == 'RGB':
+            img_color = np.array(image)
+            # Color variance in each channel
+            for channel in range(3):
+                features.append(np.var(img_color[:, :, channel]))
+        
+        return np.array(features, dtype=np.float32)
+        
+    except Exception as e:
+        logger.error(f"Handcrafted feature extraction error: {e}")
+        # Return consistent zero features
+        return np.zeros(20, dtype=np.float32)
+
+def compute_handcrafted_metrics(features: np.ndarray) -> Dict[str, float]:
+    """Compute visual metrics from handcrafted features."""
+    try:
+        # Extract specific metrics from our feature vector
+        # Features structure: [0:4] basic stats, [5:7] edge features, 
+        # [8:12] texture, [13:15] frequency, [16:19] color (if available)
+        
+        return {
+            'feature_variance': float(np.var(features)),
+            'feature_entropy': float(stats.entropy(np.histogram(features, bins=20)[0] + 1e-10)),
+            'feature_mean': float(np.mean(features)),
+            'feature_std': float(np.std(features)),
+            'edge_density': float(features[7] if len(features) > 7 else 0),
+            'texture_complexity': float(np.mean(features[8:12]) if len(features) > 12 else 0),
+            'frequency_energy': float(features[13] if len(features) > 13 else 0),
+            'color_variance': float(np.mean(features[16:]) if len(features) > 16 else 0)
+        }
+    except Exception as e:
+        logger.error(f"Handcrafted metrics computation error: {e}")
+        return {
+            'feature_variance': 0.0,
+            'feature_entropy': 0.0,
+            'feature_mean': 0.0,
+            'feature_std': 0.0,
+            'edge_density': 0.0,
+            'texture_complexity': 0.0,
+            'frequency_energy': 0.0,
+            'color_variance': 0.0
+        }
+
+def calculate_handcrafted_humanity_score(metrics: Dict[str, float]) -> Dict[str, float]:
+    """Calculate humanity score based on handcrafted visual metrics."""
+    try:
+        # Score components from handcrafted metrics
+        
+        # 1. Texture variance score - natural images have moderate variance
+        variance = metrics['feature_variance']
+        variance_score = 1.0 - min(abs(variance - 0.5), 0.5) / 0.5
+        
+        # 2. Edge density score - natural images have organic edge patterns
+        edge_density = metrics['edge_density']
+        edge_score = 1.0 - min(abs(edge_density - 0.15), 0.15) / 0.15
+        
+        # 3. Texture complexity score
+        texture = metrics['texture_complexity']
+        texture_score = min(texture * 3.0, 1.0)
+        
+        # 4. Frequency distribution score
+        freq = metrics['frequency_energy']
+        freq_score = 1.0 - min(abs(freq - 4.5), 2.0) / 2.0
+        
+        # 5. Entropy score - natural images have higher entropy
+        entropy = metrics['feature_entropy']
+        entropy_score = min(entropy / 6.0, 1.0)
+        
+        # Combined weighted score (tune these weights based on testing)
+        humanity_score = (
+            0.25 * variance_score +
+            0.20 * edge_score +
+            0.20 * texture_score +
+            0.15 * freq_score +
+            0.20 * entropy_score
+        )
+        
+        # Clamp to 0-1 range
+        humanity_score = max(0.0, min(1.0, humanity_score))
+        
+        # Calculate confidence based on metric consistency
+        scores = [variance_score, edge_score, texture_score, freq_score, entropy_score]
+        confidence = 0.5 + (0.5 * (1.0 - np.std(scores)))  # Higher confidence if scores agree
+        
+        return {
+            'humanity_score': float(humanity_score),
+            'confidence': float(confidence)
+        }
+    except Exception as e:
+        logger.error(f"Handcrafted score calculation error: {e}")
+        return {'humanity_score': 0.5, 'confidence': 0.5}
 
 # ========== ENHANCED EXPLAINABILITY FUNCTIONS ==========
 def generate_detailed_explanations(frame_results: List[Dict], 
@@ -74,20 +196,28 @@ def generate_detailed_explanations(frame_results: List[Dict],
         
         variance = visual_metrics.get('feature_variance', 0)
         entropy = visual_metrics.get('feature_entropy', 0)
+        edge_density = visual_metrics.get('edge_density', 0)
         
-        if variance > 8:
+        if variance > 0.3:
             visual_explanations.append("Rich texture complexity (natural)")
             key_findings.append("High texture complexity")
-        elif variance < 3:
+        elif variance < 0.1:
             visual_explanations.append("Low texture complexity (potentially synthetic)")
             key_findings.append("Low texture complexity")
         
-        if 3.5 < entropy < 4.5:
+        if entropy > 2.0:
             visual_explanations.append("Natural visual entropy")
             key_findings.append("Natural visual patterns")
-        elif entropy < 3:
+        elif entropy < 1.0:
             visual_explanations.append("Simplified visual patterns")
             key_findings.append("Simplified patterns")
+            
+        if edge_density > 0.2:
+            visual_explanations.append("High edge detail (natural)")
+            key_findings.append("Detailed edges")
+        elif edge_density < 0.05:
+            visual_explanations.append("Low edge detail (possibly smoothed)")
+            key_findings.append("Low edge detail")
     
     # 2. Visual score explanation
     if visual_score > 0.7:
@@ -275,90 +405,6 @@ def generate_audio_explanations(audio_analysis: Dict) -> Dict[str, Any]:
         "recommendations": insights.get('recommendations', [])
     }
 
-def extract_features(image: Image.Image) -> np.ndarray:
-    """Extract ResNet-18 features."""
-    try:
-        image_tensor = transform(image).unsqueeze(0).to(device)
-        with torch.no_grad():
-            features = feature_extractor(image_tensor)
-        return features.squeeze().cpu().numpy()
-    except Exception as e:
-        logger.error(f"Feature extraction error: {e}")
-        raise
-
-def compute_visual_metrics(features: np.ndarray) -> Dict[str, float]:
-    """Compute visual metrics from features."""
-    try:
-        # Feature variance (texture complexity)
-        feature_variance = np.var(features)
-        
-        # Entropy of feature distribution
-        hist, _ = np.histogram(features, bins=50, density=True)
-        hist = hist[hist > 0]
-        entropy = -np.sum(hist * np.log(hist))
-        
-        # Feature statistics
-        feature_mean = np.mean(features)
-        feature_std = np.std(features)
-        
-        # Kurtosis and skewness (distribution shape)
-        kurtosis_value = float(stats.kurtosis(features.flatten()))
-        skewness_value = float(stats.skew(features.flatten()))
-        
-        return {
-            'feature_variance': float(feature_variance),
-            'feature_entropy': float(entropy),
-            'feature_mean': float(feature_mean),
-            'feature_std': float(feature_std),
-            'kurtosis': kurtosis_value,
-            'skewness': skewness_value
-        }
-    except Exception as e:
-        logger.error(f"Metrics computation error: {e}")
-        return {
-            'feature_variance': 0.0,
-            'feature_entropy': 0.0,
-            'feature_mean': 0.0,
-            'feature_std': 0.0,
-            'kurtosis': 0.0,
-            'skewness': 0.0
-        }
-
-def calculate_humanity_score(metrics: Dict[str, float]) -> Dict[str, float]:
-    """Calculate humanity score based on visual metrics."""
-    try:
-        # Real metrics-based scoring (no randomness)
-        
-        # Higher variance typically indicates more natural textures
-        variance_score = min(metrics['feature_variance'] / 10.0, 1.0)
-        
-        # Moderate entropy indicates natural complexity
-        entropy = metrics['feature_entropy']
-        entropy_score = 1.0 - abs(entropy - 4.0) / 4.0  # Target entropy around 4
-        entropy_score = max(0.0, min(1.0, entropy_score))
-        
-        # Natural images have moderate kurtosis
-        kurtosis = abs(metrics['kurtosis'])
-        kurtosis_score = 1.0 - min(kurtosis / 10.0, 1.0)
-        
-        # Combined score (weighted average)
-        humanity_score = (
-            0.4 * variance_score +
-            0.4 * entropy_score +
-            0.2 * kurtosis_score
-        )
-        
-        # Calculate confidence based on metric consistency
-        confidence = min(1.0, humanity_score * 1.2)
-        
-        return {
-            'humanity_score': float(humanity_score),
-            'confidence': float(confidence)
-        }
-    except Exception as e:
-        logger.error(f"Score calculation error: {e}")
-        return {'humanity_score': 0.5, 'confidence': 0.5}
-
 def combine_verdicts(video_response: Dict, audio_response: Optional[Dict]) -> Dict:
     """Combine video and audio analysis for final verdict."""
     video_verdict = video_response.get('aggregated_metrics', {}).get('final_verdict', 'unknown')
@@ -417,8 +463,8 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
                 contents = await file.read()
                 image = Image.open(io.BytesIO(contents)).convert('RGB')
                 
-                # Extract features
-                features = extract_features(image)
+                # Extract handcrafted features (REPLACED PyTorch)
+                features = extract_handcrafted_features(image)
                 
                 # Add to temporal analyzer
                 temporal_analyzer.add_frame(features)
@@ -426,11 +472,11 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
                 # Get temporal analysis
                 temporal_metrics = temporal_analyzer.analyze_current()
                 
-                # Compute visual metrics
-                visual_metrics = compute_visual_metrics(features)
+                # Compute visual metrics from handcrafted features
+                visual_metrics = compute_handcrafted_metrics(features)
                 
-                # Calculate humanity score
-                scores = calculate_humanity_score(visual_metrics)
+                # Calculate humanity score from handcrafted metrics
+                scores = calculate_handcrafted_humanity_score(visual_metrics)
                 
                 # Adjust score based on temporal anomalies
                 if temporal_metrics.get('has_anomaly', False):

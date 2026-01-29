@@ -12,8 +12,10 @@
   "license": "ISC",
   "packageManager": "pnpm@10.12.1",
   "dependencies": {
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "axios": "^1.13.3",
     "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "^0.8.3",
     "express": "^5.2.1",
