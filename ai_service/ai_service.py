@@ -39,7 +39,8 @@ def extract_handcrafted_features(image: Image.Image) -> np.ndarray:
     """Extract handcrafted visual features without PyTorch."""
     try:
         # Convert PIL Image to grayscale numpy array for most analyses
-        img_gray = np.array(image.convert('L')).astype(np.float32)
+        img_gray_uint8 = np.array(image.convert('L')).astype(np.uint8)
+        img_gray = img_gray_uint8.astype(np.float32) / 255.0
         
         # Calculate multiple feature types
         features = []
@@ -54,17 +55,18 @@ def extract_handcrafted_features(image: Image.Image) -> np.ndarray:
         ])
         
         # 2. EDGE FEATURES (Canny edge detection)
-        edges = cv2.Canny(img_gray.astype(np.uint8), 50, 150)
+        edges = cv2.Canny(img_gray_uint8, 50, 150)
+        edges_norm = edges.astype(np.float32) / 255.0
         features.extend([
-            np.mean(edges),                     # Edge strength
-            np.var(edges),                      # Edge consistency
-            np.sum(edges > 0) / edges.size      # Edge density (0-1)
+            np.mean(edges_norm),                     # Edge strength
+            np.var(edges_norm),                      # Edge consistency
+            np.sum(edges > 0) / edges.size           # Edge density (0-1)
         ])
         
         # 3. TEXTURE FEATURES (Local Binary Patterns)
         radius = 2
         n_points = 8 * radius
-        lbp = local_binary_pattern(img_gray, n_points, radius, method='uniform')
+        lbp = local_binary_pattern(img_gray_uint8, n_points, radius, method='uniform')
         hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, n_points + 3), density=True)
         features.extend(hist[:5])  # Use first 5 histogram bins as texture features
         
@@ -80,7 +82,7 @@ def extract_handcrafted_features(image: Image.Image) -> np.ndarray:
         
         # 5. COLOR FEATURES (if color image)
         if image.mode == 'RGB':
-            img_color = np.array(image)
+            img_color = np.array(image).astype(np.float32) / 255.0
             # Color variance in each channel
             for channel in range(3):
                 features.append(np.var(img_color[:, :, channel]))
@@ -90,7 +92,7 @@ def extract_handcrafted_features(image: Image.Image) -> np.ndarray:
     except Exception as e:
         logger.error(f"Handcrafted feature extraction error: {e}")
         # Return consistent zero features
-        return np.zeros(20, dtype=np.float32)
+        return np.zeros(19, dtype=np.float32)
 
 def compute_handcrafted_metrics(features: np.ndarray) -> Dict[str, float]:
     """Compute visual metrics from handcrafted features."""
@@ -129,11 +131,11 @@ def calculate_handcrafted_humanity_score(metrics: Dict[str, float]) -> Dict[str,
         
         # 1. Texture variance score - natural images have moderate variance
         variance = metrics['feature_variance']
-        variance_score = 1.0 - min(abs(variance - 0.5), 0.5) / 0.5
+        variance_score = 1.0 - min(abs(variance - 0.04), 0.04) / 0.04
         
         # 2. Edge density score - natural images have organic edge patterns
         edge_density = metrics['edge_density']
-        edge_score = 1.0 - min(abs(edge_density - 0.15), 0.15) / 0.15
+        edge_score = 1.0 - min(abs(edge_density - 0.10), 0.10) / 0.10
         
         # 3. Texture complexity score
         texture = metrics['texture_complexity']
@@ -141,11 +143,11 @@ def calculate_handcrafted_humanity_score(metrics: Dict[str, float]) -> Dict[str,
         
         # 4. Frequency distribution score
         freq = metrics['frequency_energy']
-        freq_score = 1.0 - min(abs(freq - 4.5), 2.0) / 2.0
+        freq_score = 1.0 - min(abs(freq - 2.5), 2.5) / 2.5
         
         # 5. Entropy score - natural images have higher entropy
         entropy = metrics['feature_entropy']
-        entropy_score = min(entropy / 6.0, 1.0)
+        entropy_score = min(entropy / 3.0, 1.0)
         
         # Combined weighted score (tune these weights based on testing)
         humanity_score = (
@@ -480,8 +482,8 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
                 
                 # Adjust score based on temporal anomalies
                 if temporal_metrics.get('has_anomaly', False):
-                    scores['humanity_score'] *= 0.8
-                    scores['confidence'] *= 0.9
+                    scores['humanity_score'] *= 0.9
+                    scores['confidence'] *= 0.95
                 
                 # Determine verdict
                 humanity_score = scores['humanity_score']
@@ -521,7 +523,7 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
             anomaly_count = temporal_summary.get('anomaly_count', 0)
             
             # Penalize for anomalies
-            anomaly_penalty = min(anomaly_count * 0.1, 0.3)
+            anomaly_penalty = min(anomaly_count * 0.05, 0.2)
             temporal_factor = temporal_score * (1 - anomaly_penalty)
             
             # Combined score: 70% visual, 30% temporal
@@ -529,11 +531,11 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
             final_humanity = max(0.0, min(1.0, final_humanity))
             
             # Determine final verdict
-            if final_humanity > 0.75 and anomaly_count == 0 and temporal_score > 0.7:
+            if final_humanity > 0.68 and anomaly_count <= 2 and temporal_score > 0.5:
                 final_verdict = "likely_real"
-            elif final_humanity > 0.6 and anomaly_count <= 1 and temporal_score > 0.5:
+            elif final_humanity > 0.58 and anomaly_count <= 3 and temporal_score > 0.4:
                 final_verdict = "likely_real"
-            elif final_humanity > 0.4:
+            elif final_humanity > 0.45:
                 final_verdict = "needs_review"
             else:
                 final_verdict = "suspicious"

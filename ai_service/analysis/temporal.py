@@ -34,25 +34,27 @@ class TemporalAnalyzer:
             return self._empty_response()
         
         drift = self._calculate_drift()
-        is_abrupt = drift > 0.15
+        is_abrupt = drift > 0.2
         
         # Simple anomaly detection
         is_anomaly = False
         reason = "normal"
         
-        if len(self.drift_history) >= 5:
-            recent_drifts = self.drift_history[-5:] if len(self.drift_history) >= 5 else self.drift_history
-            avg_drift = np.mean(recent_drifts) if recent_drifts else 0
+        if len(self.drift_history) >= 8:
+            recent_drifts = self.drift_history[-8:]
+            avg_drift = float(np.mean(recent_drifts)) if recent_drifts else 0.0
+            drift_std = float(np.std(recent_drifts)) if len(recent_drifts) > 1 else 0.0
+            threshold = max(avg_drift + 2.5 * drift_std, 0.2)
             
             # Check for unusual changes
-            if drift > avg_drift * 2.5:  # Simple threshold
+            if drift > threshold:
                 is_anomaly = True
                 reason = "unusual_frame_change"
                 if is_abrupt:
                     reason += "|abrupt_jump"
             
             # Also check for very low similarity (sudden complete change)
-            if drift > 0.3:
+            if drift > 0.35:
                 is_anomaly = True
                 reason = "extreme_frame_change"
         
@@ -87,7 +89,7 @@ class TemporalAnalyzer:
         drift_std = float(np.std(drifts)) if len(drifts) > 1 else 0.0
         
         # Consistency score: lower drift and lower std = higher consistency
-        consistency_score = max(0.0, 1.0 - (avg_drift * 2.0 + drift_std * 3.0))
+        consistency_score = max(0.0, 1.0 - (avg_drift * 1.5 + drift_std * 2.0))
         
         # Determine stability
         if consistency_score > 0.8:
