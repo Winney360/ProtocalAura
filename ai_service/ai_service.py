@@ -16,6 +16,7 @@ from skimage.feature import local_binary_pattern
 # Import analyzers
 from analysis.audio import AudioAnalyzer
 from analysis.temporal import TemporalAnalyzer
+from analysis.deepfake_detector import get_deepfake_detector
 
 app = FastAPI(title="Protocol Aura AI Service")
 
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Initialize analyzers
 audio_analyzer = AudioAnalyzer(sample_rate=22050)
+deepfake_detector = get_deepfake_detector()
 
 # ========== HANDCRAFTED FEATURE EXTRACTION FUNCTIONS ==========
 def extract_handcrafted_features(image: Image.Image) -> np.ndarray:
@@ -442,15 +444,16 @@ def generate_audio_explanations(audio_analysis: Dict) -> Dict[str, Any]:
     }
 
 def combine_verdicts(video_response: Dict, audio_response: Optional[Dict]) -> Dict:
-    """Combine video and audio analysis for final verdict with decisive boundaries."""
+    """Combine video and audio analysis for final verdict - SIMPLIFIED & PRACTICAL."""
     video_verdict = video_response.get('aggregated_metrics', {}).get('final_verdict', 'unknown')
     video_confidence = video_response.get('aggregated_metrics', {}).get('final_confidence', 0.5)
+    temporal_score = video_response.get('temporal_analysis', {}).get('temporal_consistency_score', 0.5)
     
     if not audio_response or not audio_response.get('success', False):
-        # No audio - use video verdict directly but adjust confidence
+        # Video-only: use video verdict directly
         return {
             'verdict': video_verdict,
-            'confidence': video_confidence * 0.85,  # Slightly lower confidence without audio
+            'confidence': video_confidence * 0.85,
             'sources': ['video_only'],
             'notes': 'Audio analysis not available'
         }
@@ -458,78 +461,34 @@ def combine_verdicts(video_response: Dict, audio_response: Optional[Dict]) -> Di
     audio_verdict = audio_response.get('final_audio_verdict', 'unknown')
     audio_confidence = audio_response.get('confidence', 0.5)
     
-    # Combine weights: 70% video, 30% audio (more balanced approach)
     combined_confidence = (video_confidence * 0.7) + (audio_confidence * 0.3)
     
-    # DECISIVE VERDICT LOGIC:
-    # Audio must have HIGH confidence (0.50+) to override good video
-    # Weak audio signals (< 0.50) don't override strong video signals
+    # SIMPLIFIED LOGIC:
+    # Authentic: Good video + audio not strongly suspicious
+    # Synthetic: Bad video AND audio suspicious OR (perfect temporal + audio suspicious)
+    # Needs review: Everything else (be honest about limits)
     
-    # Case 1: Both agree on authenticity
-    if video_verdict == 'likely_real' and audio_verdict in ['likely_authentic', 'unknown']:
-        if combined_confidence > 0.75:
-            verdict = 'authentic'  # High confidence authentic
-        elif combined_confidence > 0.65:
-            verdict = 'likely_authentic'
-        else:
-            verdict = 'needs_review'  # Borderline authentic
-    
-    # Case 2: Both agree on synthetic (with strong audio confidence)
-    elif video_verdict == 'suspicious' and audio_verdict == 'suspicious' and audio_confidence > 0.50:
-        if combined_confidence > 0.75:
-            verdict = 'synthetic'  # High confidence synthetic
-        elif combined_confidence > 0.65:
-            verdict = 'likely_synthetic'
-        else:
-            verdict = 'needs_review'  # Borderline synthetic
-    
-    # Case 3: Audio is HIGHLY confident about synthesis (confidence > 0.60)
-    elif audio_verdict == 'suspicious' and audio_confidence > 0.60:
-        # Audio is confident about synthesis - override video
-        verdict = 'likely_synthetic'
-    
-    # Case 4: Video says authentic, audio weak signal (< 0.50 confidence)
-    elif video_verdict == 'likely_real' and audio_verdict == 'suspicious':
-        if audio_confidence < 0.50:
-            # Audio is uncertain (< 0.50) - trust video instead
-            verdict = 'likely_authentic'
-        elif audio_confidence > 0.60:
-            # Audio is confident - flag as needs review
-            verdict = 'needs_review'
-        else:
-            # Medium confidence (0.50-0.60) - needs review
-            verdict = 'needs_review'
-    
-    # Case 5: Video suspicious, audio authentic
-    elif video_verdict == 'suspicious' and audio_verdict == 'likely_authentic':
-        if video_confidence < 0.4:
-            # Video only slightly suspicious, audio good = authentic
-            verdict = 'likely_authentic'
-        else:
-            verdict = 'needs_review'
-    
-    # Case 6: Video suspicious with strong audio confirmation
-    elif video_verdict == 'suspicious' and audio_confidence > 0.60:
-        verdict = 'likely_synthetic'  # Both bad, audio confident
-    elif video_verdict == 'suspicious':
-        verdict = 'needs_review'  # Only video bad
-    elif audio_verdict == 'suspicious' and audio_confidence > 0.60:
-        verdict = 'likely_synthetic'  # Only audio bad but confident
-    elif video_verdict == 'likely_real':
+    # ===== AUTHENTIC PATH =====
+    if video_verdict == 'likely_real' and audio_confidence < 0.45:
+        # Good video + audio not strongly against it
         verdict = 'likely_authentic'
     
-    # Default fallback - trust the stronger signal
+    # ===== SYNTHETIC PATH =====
+    # Both bad: video says suspicious AND audio says suspicious
+    elif video_verdict == 'suspicious' and audio_verdict == 'suspicious':
+        verdict = 'likely_synthetic'
+    
+    # Perfect temporal (AI indicator) + suspicious audio
+    elif temporal_score > 0.95 and audio_verdict == 'suspicious':
+        verdict = 'suspicious'  # Likely AI-generated
+    
+    # Audio very confident about synthesis (> 0.55)
+    elif audio_verdict == 'suspicious' and audio_confidence > 0.55:
+        verdict = 'likely_synthetic'
+    
+    # ===== NEEDS REVIEW PATH (EVERYTHING ELSE) =====
     else:
-        if video_confidence > 0.75:
-            verdict = 'likely_authentic'
-        elif audio_confidence > 0.70 and audio_verdict == 'suspicious':
-            verdict = 'likely_synthetic'
-        elif combined_confidence > 0.65:
-            verdict = 'likely_authentic'
-        elif combined_confidence < 0.35:
-            verdict = 'likely_synthetic'
-        else:
-            verdict = 'needs_review'
+        verdict = 'needs_review'
     
     return {
         'verdict': verdict,
@@ -575,6 +534,22 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
                 # Calculate humanity score from handcrafted metrics
                 scores = calculate_handcrafted_humanity_score(visual_metrics)
                 
+                # GET DEEP LEARNING PREDICTION (NEW)
+                frame_array = np.array(image)
+                dl_analysis = deepfake_detector.analyze_frame_ensemble(frame_array)
+                dl_deepfake_score = dl_analysis.get('ensemble_score', 0.5)
+                
+                # Adjust handcrafted score based on deep learning signal
+                # If DL thinks it's deepfake (score > 0.6), lower the humanity score
+                if dl_deepfake_score > 0.65:
+                    scores['humanity_score'] *= 0.85  # Reduce by 15%
+                elif dl_deepfake_score > 0.55:
+                    scores['humanity_score'] *= 0.95  # Reduce by 5%
+                
+                # Adjust confidence if DL is very confident
+                if dl_deepfake_score < 0.35:
+                    scores['confidence'] = max(scores['confidence'], 0.85)  # High confidence in authenticity
+                
                 # Adjust score based on temporal anomalies
                 if temporal_metrics.get('has_anomaly', False):
                     scores['humanity_score'] *= 0.9
@@ -595,7 +570,8 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
                     'confidence': scores['confidence'],
                     'verdict': verdict,
                     'visual_metrics': visual_metrics,
-                    'temporal_metrics': temporal_metrics
+                    'temporal_metrics': temporal_metrics,
+                    'deepfake_analysis': dl_analysis  # Include DL results
                 })
                 
             except Exception as e:
@@ -625,20 +601,17 @@ async def analyze_image_frames(files: List[UploadFile] = File(...)):
             final_humanity = (avg_humanity * 0.7) + (temporal_factor * 0.3)
             final_humanity = max(0.0, min(1.0, final_humanity))
             
-            # Determine final verdict - CLEAR DECISION BOUNDARIES
-            # High authenticity = authentic, Low authenticity = synthetic, Middle = review
-            if final_humanity > 0.70 and temporal_score > 0.85 and anomaly_count <= 1:
-                final_verdict = "likely_real"  # CLEARLY authentic
-            elif final_humanity > 0.60 and temporal_score > 0.75 and anomaly_count <= 2:
-                final_verdict = "likely_real"  # Likely authentic
-            elif final_humanity < 0.30 and temporal_score < 0.50:
-                final_verdict = "suspicious"  # CLEARLY synthetic
-            elif final_humanity < 0.40 and temporal_score < 0.60:
-                final_verdict = "suspicious"  # Likely synthetic
-            elif 0.40 <= final_humanity <= 0.60 or 0.50 <= temporal_score <= 0.75:
-                final_verdict = "needs_review"  # Genuinely inconclusive - middle ground
+            # Determine final verdict - SIMPLE & PRACTICAL
+            # Good video (>0.65) = likely_real
+            # Bad video (<0.40) = suspicious
+            # Middle = needs_review (be honest)
+            
+            if final_humanity > 0.65 and temporal_score > 0.75:
+                final_verdict = "likely_real"  # Good video + reasonable temporal
+            elif final_humanity < 0.40:
+                final_verdict = "suspicious"  # Clearly low score
             else:
-                final_verdict = "likely_real"  # Default to authentic when unsure
+                final_verdict = "needs_review"  # Middle ground - inconclusive
                 
             final_confidence = (avg_confidence * 0.7) + (temporal_score * 0.3)
             final_confidence = max(0.0, min(1.0, final_confidence))
